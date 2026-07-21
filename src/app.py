@@ -9,7 +9,12 @@ import aiohttp
 from aiohttp import web
 
 from .config import Config, ConfigError
-from .inline import build_results, no_results_article, unavailable_article
+from .inline import (
+    MAX_ANIMATION_BYTES,
+    build_results,
+    no_results_article,
+    unavailable_article,
+)
 from .klipy import KlipyClient, KlipyError, KlipyUnavailable
 from .routing import parse, parse_page
 from .telegram import TelegramClient, TelegramError
@@ -17,6 +22,15 @@ from .telegram import TelegramClient, TelegramError
 log = logging.getLogger(__name__)
 
 SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+
+
+def _result_bytes(item, media_type) -> int:
+    """Bytes this item will make the client download, for volume logging."""
+    chosen = item.best("mp4", max_bytes=MAX_ANIMATION_BYTES) or item.best(
+        "gif", max_bytes=MAX_ANIMATION_BYTES
+    )
+    thumb = item.preview()
+    return (chosen.size if chosen else 0) + (thumb.size if thumb else 0)
 
 
 async def _handle_inline_query(app: web.Application, query: dict) -> None:
@@ -54,6 +68,16 @@ async def _handle_inline_query(app: web.Application, query: dict) -> None:
         elif parsed.text:
             results = [no_results_article(parsed.text, parsed.media_type)]
         has_next = False
+
+    # Log shape, not content: enough to correlate a client-side crash with what
+    # was served, without recording what anyone searched for.
+    log.info(
+        "inline %s page=%d results=%d bytes=%d",
+        parsed.media_type.value,
+        page,
+        len(results),
+        sum(_result_bytes(item, parsed.media_type) for item in items),
+    )
 
     try:
         await telegram.answer_inline_query(

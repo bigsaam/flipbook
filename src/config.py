@@ -49,7 +49,12 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
-        per_page = _int("FLIPBOOK_PER_PAGE", 30)
+        # Deliberately small. Telegram fires a fresh inline query on every
+        # keystroke, and each result is a media download into the client's
+        # cache, so a large page multiplies client-side work per character
+        # typed. Telegram requests page 2 via next_offset when the user
+        # scrolls, so a small page costs nothing in reachable results.
+        per_page = _int("FLIPBOOK_PER_PAGE", 10)
         if not MIN_PER_PAGE <= per_page <= MAX_RESULTS:
             raise ConfigError(
                 f"FLIPBOOK_PER_PAGE must be between {MIN_PER_PAGE} and {MAX_RESULTS}"

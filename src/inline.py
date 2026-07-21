@@ -14,12 +14,16 @@ from .media import STILL_FORMATS, MediaItem, MediaType
 # Telegram rejects result IDs longer than 64 bytes.
 MAX_ID_LEN = 64
 
-# Cap the bytes we ask the client to fetch and cache per result. A page of 30
-# results is 30 concurrent downloads into the client's media cache, and the
-# macOS client has been observed crashing under that churn, so prefer the
-# smaller rendition whenever Klipy offers one.
-MAX_ANIMATION_BYTES = 2 * 1024 * 1024
-MAX_STILL_BYTES = 1 * 1024 * 1024
+# Cap the bytes we ask the client to fetch and cache per result. Klipy's
+# reported sizes are exact (verified against Content-Length), so these are
+# reliable. The hd gif of a single item can be 15 MB while its hd mp4 is
+# 494 KB, so without a cap one result could outweigh a whole page.
+#
+# The macOS client has been observed stack-overflowing on its MediaBox cache
+# queue while scrolling inline results; keeping per-result bytes and per-page
+# count low is the only lever a server has over that.
+MAX_ANIMATION_BYTES = 1024 * 1024
+MAX_STILL_BYTES = 512 * 1024
 
 _THUMB_MIME = {
     "jpg": "image/jpeg",
