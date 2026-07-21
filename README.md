@@ -103,6 +103,9 @@ PUBLIC_DOMAIN=<tunnel-host> python -m src.app
 
 ## Known limitations
 
+- **Memes are not available.** Klipy's `/memes/` route returns 404 on a test key,
+  so `m:` reports "not available" rather than failing silently. GIFs, stickers,
+  and clips all work. This may change with production access.
 - **Stickers send as animations, not native Telegram stickers.** Telegram only
   accepts stickers by `file_id` (already uploaded), never by URL. They render
   correctly in chat but cannot be saved to a sticker pack.
@@ -111,6 +114,28 @@ PUBLIC_DOMAIN=<tunnel-host> python -m src.app
   friction of the inline-bot approach.
 - **Some groups disable inline bots** in their permission settings.
 - Every query you type goes to your own server and then to Klipy.
+
+## Sharing the bot
+
+Inline bots are public: anyone can type `@yourbot query` in any chat with no
+install, no permission, and without adding the bot anywhere. Two consequences:
+
+- **Their searches spend your Klipy quota.** A test key allows 100 calls/hour
+  across everyone using the bot. Request production access before sharing widely.
+- **Their queries pass through your server.** Only the search text and Telegram
+  user ID, never message contents — but it is your infrastructure.
+
+To restrict use, filter on `inline_query["from"]["id"]` in `app.py` against an
+allowlist. There is no such filter today; the bot answers anyone.
+
+## A note on the macOS client
+
+The macOS Telegram client (`ru.keepcoder.Telegram`) has been observed crashing
+with a stack overflow on its `MediaBox-Data` queue while scrolling inline
+results — ~1600 levels of recursion inside the client's own media cache. Nothing
+a bot returns should be able to crash a client, so this is a client-side bug,
+not something this server can fix. flipbook caps rendition sizes to reduce the
+download churn that appears to provoke it.
 
 ## Licence
 

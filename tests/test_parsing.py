@@ -76,48 +76,130 @@ class TestAssetSelection:
         assert self._item().best("webm") is None
 
 
-class TestKlipyNormalisation:
-    def test_walks_arbitrarily_nested_files(self):
-        raw = {
-            "id": 42,
-            "title": "Nested",
-            "files": {
-                "hd": {"gif": {"url": "http://e/a.gif", "width": 480, "height": 270}},
-                "sm": {"mp4": {"url": "http://e/a.mp4", "width": 240, "height": 135}},
+def _live_shape_item() -> dict:
+    """The real /gifs/ item shape, captured from the live API via probe.py."""
+    return {
+        "id": 9647300348882249,
+        "slug": "cat-scuba-cat-dance",
+        "title": "Cat Scuba Cat Dance",
+        "tags": ["cat", "dance"],
+        "type": "gif",
+        # Klipy attaches an inline base64 placeholder; it must never be
+        # mistaken for a usable asset.
+        "blur_preview": "data:image/jpeg;base64,/9j//gAQTGF2YzU5",
+        "file": {
+            "hd": {
+                "gif": {"url": "https://s/a.gif", "width": 220, "height": 229,
+                        "size": 273268},
+                "webp": {"url": "https://s/a.webp", "width": 220, "height": 230,
+                         "size": 71688},
+                "jpg": {"url": "https://s/a.jpg", "width": 220, "height": 229,
+                        "size": 8064},
+                "mp4": {"url": "https://s/a.mp4", "width": 220, "height": 230,
+                        "size": 75638},
+                "webm": {"url": "https://s/a.webm", "width": 220, "height": 229,
+                         "size": 60623},
             },
+            "xs": {
+                "gif": {"url": "https://s/x.gif", "width": 74, "height": 90},
+                "jpg": {"url": "https://s/x.jpg", "width": 74, "height": 90},
+            },
+        },
+    }
+
+
+class TestKlipyNormalisation:
+    def test_parses_the_live_gif_shape(self):
+        item = _to_item(_live_shape_item())
+        assert item is not None
+        assert item.id == "9647300348882249"
+        assert item.title == "Cat Scuba Cat Dance"
+        assert {a.fmt for a in item.assets} == {"gif", "webp", "jpg", "mp4", "webm"}
+        assert len(item.assets) == 7
+
+    def test_blur_preview_data_uri_is_never_collected(self):
+        item = _to_item(_live_shape_item())
+        assert item is not None
+        assert all(a.url.startswith("http") for a in item.assets)
+        assert not any("base64" in a.url for a in item.assets)
+
+    def test_format_comes_from_parent_key_not_extension(self):
+        # Klipy URLs often have long hashes; some carry no extension at all.
+        raw = {
+            "id": "z",
+            "file": {"hd": {"mp4": {"url": "https://s/34aQxa9DrNXvY", "width": 4,
+                                    "height": 9}}},
         }
         item = _to_item(raw)
         assert item is not None
-        assert item.id == "42"
-        assert {a.fmt for a in item.assets} == {"gif", "mp4"}
+        assert item.assets[0].fmt == "mp4"
 
-    def test_flat_files_shape_also_works(self):
-        item = _to_item({"id": "b", "files": {"url": "http://e/b.gif"}})
+    def test_falls_back_to_whole_item_when_file_key_absent(self):
+        # Other media families may not use the same envelope.
+        item = _to_item({"id": "b", "media": {"url": "https://e/b.gif"}})
         assert item is not None
         assert item.assets[0].fmt == "gif"
 
-    def test_format_from_content_type_when_url_has_no_extension(self):
+    def test_format_from_content_type_when_no_hint_or_extension(self):
         item = _to_item(
-            {"id": "c", "files": {"url": "http://e/render?id=9", "type": "video/mp4"}}
+            {"id": "c", "file": {"url": "https://e/render?id=9", "type": "video/mp4"}}
         )
         assert item is not None
         assert item.assets[0].fmt == "mp4"
 
     def test_item_with_no_usable_media_is_dropped(self):
-        assert _to_item({"id": "d", "files": {}}) is None
-        assert _to_item({"id": "e", "files": {"url": "http://e/f.txt"}}) is None
+        assert _to_item({"id": "d", "file": {}}) is None
+        assert _to_item({"id": "e", "file": {"url": "https://e/f.txt"}}) is None
 
     def test_duplicate_urls_are_collapsed(self):
         raw = {
             "id": "f",
-            "files": {
-                "hd": {"gif": {"url": "http://e/same.gif"}},
-                "md": {"gif": {"url": "http://e/same.gif"}},
+            "file": {
+                "hd": {"gif": {"url": "https://e/same.gif"}},
+                "md": {"gif": {"url": "https://e/same.gif"}},
             },
         }
         item = _to_item(raw)
         assert item is not None
         assert len(item.assets) == 1
+
+    def test_parses_the_live_clip_shape(self):
+        # /clips/ returns a flat {format: url} map with dimensions held in a
+        # parallel file_meta object, unlike the nested /gifs/ shape.
+        raw = {
+            "slug": "star-wars-2--kqkEZgh9n",
+            "title": "STAR WARS",
+            "type": "clip",
+            "url": "https://klipy.com/clips/star-wars-2",
+            "file": {
+                "mp4": "https://s/a.mp4",
+                "gif": "https://s/a.gif",
+                "webp": "https://s/a.webp",
+            },
+            "file_meta": {
+                "mp4": {"width": 1280, "height": 534, "size": 287964},
+                "gif": {"width": 320, "height": 133, "size": 339196},
+                "webp": {"width": 320, "height": 133, "size": 148118},
+            },
+        }
+        item = _to_item(raw)
+        assert item is not None
+        # Clips carry no "id" field, so the slug has to stand in.
+        assert item.id == "star-wars-2--kqkEZgh9n"
+        assert {a.fmt for a in item.assets} == {"mp4", "gif", "webp"}
+        mp4 = item.best("mp4")
+        assert mp4.width == 1280 and mp4.size == 287964
+
+    def test_sizes_are_captured_from_the_live_shape(self):
+        item = _to_item(_live_shape_item())
+        assert item is not None
+        assert item.best("mp4").size == 75638
+
+    def test_selects_largest_gif_and_smallest_still_from_live_shape(self):
+        item = _to_item(_live_shape_item())
+        assert item is not None
+        assert item.best("gif").url == "https://s/a.gif"
+        assert item.preview().url == "https://s/x.jpg"
 
 
 class TestResultBuilding:
@@ -155,6 +237,43 @@ class TestResultBuilding:
         # Telegram rejects video results missing either of these.
         assert result["thumbnail_url"]
         assert result["title"]
+
+    def test_webm_never_lands_in_mpeg4_url(self):
+        # Klipy stickers ship webm but no mp4. Telegram requires H.264 MP4 in
+        # mpeg4_url, so these must fall through to the gif result type.
+        item = self._item(
+            Asset("http://e/a.webm", "webm", 120, 120),
+            Asset("http://e/a.gif", "gif", 120, 120),
+        )
+        result = build_results([item], MediaType.STICKER)[0]
+        assert result["type"] == "gif"
+        assert result["gif_url"] == "http://e/a.gif"
+        assert "webm" not in str(result)
+
+    def test_clip_video_never_uses_webm(self):
+        item = self._item(Asset("http://e/a.webm", "webm", 600, 400))
+        results = build_results([item], MediaType.CLIP)
+        assert all(r.get("video_url", "").endswith(".mp4") for r in results)
+
+    def test_oversized_rendition_is_rejected_for_a_smaller_one(self):
+        item = self._item(
+            Asset("http://e/huge.mp4", "mp4", 1920, 1080, size=9_000_000),
+            Asset("http://e/small.mp4", "mp4", 320, 180, size=90_000),
+        )
+        result = build_results([item], MediaType.GIF)[0]
+        assert result["mpeg4_url"] == "http://e/small.mp4"
+
+    def test_smallest_is_used_when_every_rendition_is_oversized(self):
+        item = self._item(
+            Asset("http://e/big.mp4", "mp4", 1920, 1080, size=9_000_000),
+            Asset("http://e/bigger.mp4", "mp4", 3840, 2160, size=20_000_000),
+        )
+        result = build_results([item], MediaType.GIF)[0]
+        assert result["mpeg4_url"] == "http://e/big.mp4"
+
+    def test_unknown_sizes_do_not_disqualify_a_rendition(self):
+        item = self._item(Asset("http://e/a.mp4", "mp4", 400, 400))
+        assert build_results([item], MediaType.GIF)[0]["mpeg4_url"] == "http://e/a.mp4"
 
     def test_unrenderable_items_are_skipped_not_crashed(self):
         item = self._item(Asset("http://e/a.svg", "svg", 10, 10))

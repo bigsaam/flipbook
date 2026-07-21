@@ -9,8 +9,8 @@ import aiohttp
 from aiohttp import web
 
 from .config import Config, ConfigError
-from .inline import build_results, no_results_article
-from .klipy import KlipyClient, KlipyError
+from .inline import build_results, no_results_article, unavailable_article
+from .klipy import KlipyClient, KlipyError, KlipyUnavailable
 from .routing import parse, parse_page
 from .telegram import TelegramClient, TelegramError
 
@@ -29,6 +29,7 @@ async def _handle_inline_query(app: web.Application, query: dict) -> None:
     parsed = parse(query.get("query", ""))
     page = parse_page(query.get("offset", ""))
 
+    unavailable = False
     try:
         items, has_next = await klipy.fetch(
             parsed.media_type,
@@ -36,6 +37,9 @@ async def _handle_inline_query(app: web.Application, query: dict) -> None:
             page=page,
             per_page=config.per_page,
         )
+    except KlipyUnavailable:
+        log.warning("No Klipy route for %s", parsed.media_type.value)
+        items, has_next, unavailable = [], False, True
     except (KlipyError, aiohttp.ClientError, asyncio.TimeoutError):
         log.exception("Klipy lookup failed for %r", parsed.text)
         # Answer with nothing rather than let Telegram show a spinner until timeout.
@@ -43,9 +47,12 @@ async def _handle_inline_query(app: web.Application, query: dict) -> None:
 
     results = build_results(items, parsed.media_type)
 
-    # Only explain emptiness on the first page; a blank page 2 is just the end.
-    if not results and page == 1 and parsed.text:
-        results = [no_results_article(parsed.text, parsed.media_type)]
+    # Only explain on the first page; a blank page 2 is just the end of results.
+    if not results and page == 1:
+        if unavailable:
+            results = [unavailable_article(parsed.media_type)]
+        elif parsed.text:
+            results = [no_results_article(parsed.text, parsed.media_type)]
         has_next = False
 
     try:

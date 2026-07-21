@@ -39,6 +39,7 @@ class Asset:
     fmt: str
     width: int = 0
     height: int = 0
+    size: int = 0
 
     @property
     def area(self) -> int:
@@ -53,16 +54,28 @@ class MediaItem:
     title: str
     assets: tuple[Asset, ...]
 
-    def best(self, *formats: str, largest: bool = True) -> Asset | None:
+    def best(
+        self, *formats: str, largest: bool = True, max_bytes: int = 0
+    ) -> Asset | None:
         """Pick a rendition, preferring earlier formats in the given order.
 
         Falls through the format list so a caller can express "mp4 if you have
         it, otherwise gif" without knowing what Klipy actually returned.
+
+        ``max_bytes`` drops renditions larger than the cap when the size is
+        known. If every rendition of a format exceeds it, the smallest is used
+        rather than falling through to a worse format.
         """
         for fmt in formats:
             matches = [a for a in self.assets if a.fmt == fmt]
             if not matches:
                 continue
+            if max_bytes:
+                within = [a for a in matches if 0 < a.size <= max_bytes]
+                if within:
+                    matches = within
+                elif all(a.size for a in matches):
+                    return min(matches, key=lambda a: a.size)
             # Assets with unknown dimensions sort as 0, so a sized rendition
             # always wins over an unsized one when asking for the largest.
             return max(matches, key=lambda a: a.area) if largest else min(

@@ -67,7 +67,9 @@ async def main() -> int:
                 continue
             print(f">>> PARSED id={item.id} title={item.title!r}")
             for asset in item.assets:
-                print(f"      {asset.fmt:5} {asset.width}x{asset.height} {asset.url[:80]}")
+                # Print URLs in full: truncating hides the extension, which
+                # makes format detection look broken when it is not.
+                print(f"      {asset.fmt:5} {asset.width}x{asset.height} {asset.url}")
             print()
 
         client = KlipyClient(session, api_key)

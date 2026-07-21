@@ -43,11 +43,31 @@ media type or swapping the provider cheap.
 
 These have already caused or would cause bugs. Do not "simplify" them away.
 
-- **Klipy's `files` shape is not documented.** `klipy._collect_assets` walks the
-  response tree generically rather than indexing a known path, because the
-  nesting differs per media family and is not contractually stable. Run
-  `scripts/probe.py` against a real key before assuming a shape. Do not replace
-  the walk with hard-coded key access without probe output justifying it.
+- **Klipy's media shape differs per family, and is undocumented.** Verified
+  against the live API:
+  - `/gifs/`, `/stickers/`: `file: {hd|md|sm|xs: {gif|webp|jpg|mp4|webm:
+    {url, width, height, size}}}` — format is the *parent key*, not a field.
+  - `/clips/`: `file: {format: "url"}` flat, with dimensions in a **parallel**
+    `file_meta: {format: {width, height, size}}`. `_merge_file_meta` normalises
+    this into the nested shape so one walker handles both.
+  - Items also carry `blur_preview`, a base64 data URI. The `http` prefix check
+    in `_collect_assets` is what keeps it out of the asset list — do not relax it.
+  `_collect_assets` walks generically on purpose. Run `scripts/probe.py` against
+  a real key before assuming any shape; do not hard-code paths without probe
+  output justifying it.
+- **`/memes/` does not exist on a test key.** Both `search` and `trending` return
+  404 "Route not found" (`memes/list` returns 204 empty). `KlipyUnavailable` is
+  raised on any 404 so the user sees "not available" rather than a misleading
+  "no results". Re-check after obtaining production access.
+- **Never put webm in Telegram's `mpeg4_url`.** It requires H.264 MP4. Klipy
+  stickers ship gif/webp/webm/**png but no mp4**, so `_animation_result` asks for
+  mp4 only and falls through to gif. An earlier `best("mp4", "webm")` silently
+  handed the client a webm.
+- **Cap rendition size** (`MAX_ANIMATION_BYTES` / `MAX_STILL_BYTES`). A page of
+  30 results is 30 concurrent downloads into the client's media cache. The macOS
+  client (`ru.keepcoder.Telegram`) has been observed stack-overflowing with ~1600
+  levels of recursion on its `MediaBox-Data` queue under this churn. That is a
+  client bug, but keeping payloads small reduces exposure.
 - **Bot usernames must end in `bot`** and be 5–32 chars. `@fp` is impossible;
   `@fpbot` is the shortest legal form. Nothing hardcodes the handle — it comes
   from `getMe` — so keep it that way.
