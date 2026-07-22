@@ -285,3 +285,106 @@ class TestResultBuilding:
         ids = [r["id"] for r in build_results(items, MediaType.GIF)]
         assert len(set(ids)) == len(ids)
         assert all(len(i) <= 64 for i in ids)
+
+
+class TestThumbnailHonesty:
+    """A declared thumbnail_mime_type must match the bytes behind the URL.
+
+    The client picks a decoder from this field before it fetches, so a webp
+    labelled image/jpeg is handed to a JPEG decoder. Every other URL we send is
+    fetched from Klipy's CDN with a correct Content-Type, making this the one
+    field where the client can be actively misled.
+    """
+
+    # The formats Telegram permits, mapped to the extension each must carry.
+    LEGAL = {"image/jpeg": "jpg", "image/gif": "gif", "video/mp4": "mp4"}
+
+    def _assert_honest(self, result: dict, assets: tuple[Asset, ...]) -> None:
+        mime = result.get("thumbnail_mime_type")
+        if mime is None:
+            return  # Omitting a thumbnail is always safe.
+        assert mime in self.LEGAL, f"Telegram rejects {mime!r}"
+        by_url = {a.url: a.fmt for a in assets}
+        actual = by_url[result["thumbnail_url"]]
+        assert actual == self.LEGAL[mime], (
+            f"declared {mime} but the bytes are {actual}"
+        )
+
+    def test_sticker_shape_never_mislabels_its_thumbnail(self):
+        # The live sticker shape per commit c799cf4: no jpg and no mp4, so the
+        # only honest thumbnail is the gif. Previously the png won and was
+        # shipped as image/jpeg.
+        assets = (
+            Asset("http://e/a.gif", "gif", 320, 320, size=800_000),
+            Asset("http://e/a.webp", "webp", 220, 220, size=40_000),
+            Asset("http://e/a.webm", "webm", 320, 320, size=90_000),
+            Asset("http://e/a.png", "png", 120, 120, size=18_000),
+        )
+        result = build_results(
+            [MediaItem(id="s", title="Cat", assets=assets)], MediaType.STICKER
+        )[0]
+        self._assert_honest(result, assets)
+        assert result["thumbnail_url"] == "http://e/a.gif"
+
+    def test_thumbnail_omitted_when_no_format_can_be_labelled(self):
+        assets = (
+            Asset("http://e/a.gif", "gif", 320, 320),  # carries the result
+            Asset("http://e/a.webp", "webp", 100, 100),
+        )
+        item = MediaItem(id="s", title="", assets=assets)
+        # Strip the gif from thumbnail eligibility by leaving only webp+webm.
+        bare = MediaItem(id="s", title="", assets=(
+            Asset("http://e/b.gif", "gif", 320, 320),
+            Asset("http://e/b.webm", "webm", 100, 100),
+        ))
+        for candidate in (item, bare):
+            result = build_results([candidate], MediaType.STICKER)[0]
+            self._assert_honest(result, candidate.assets)
+            assert "webp" not in str(result) and "webm" not in str(result)
+
+    @pytest.mark.parametrize("media_type", list(MediaType))
+    def test_no_result_type_ever_declares_a_false_mime(self, media_type):
+        # One item carrying every format Klipy is known to return.
+        assets = (
+            Asset("http://e/a.jpg", "jpg", 200, 200, size=20_000),
+            Asset("http://e/a.png", "png", 200, 200, size=15_000),
+            Asset("http://e/a.webp", "webp", 200, 200, size=10_000),
+            Asset("http://e/a.gif", "gif", 400, 400, size=500_000),
+            Asset("http://e/a.mp4", "mp4", 400, 400, size=200_000),
+            Asset("http://e/a.webm", "webm", 400, 400, size=180_000),
+        )
+        item = MediaItem(id="i", title="T", assets=assets)
+        for result in build_results([item], media_type):
+            self._assert_honest(result, assets)
+
+    def test_webp_is_allowed_where_no_mime_is_declared(self):
+        # webp has no legal thumbnail_mime_type, but photo results carry no
+        # mime field at all — the client reads the CDN's Content-Type. Barring
+        # webp there would cost quality for no safety gain, so the rule is
+        # "never declare a false type", not "never send webp".
+        # No jpg present, so webp is the best still available. Format order
+        # outranks size, so a jpg would legitimately win if there were one.
+        assets = (
+            Asset("http://e/small.webp", "webp", 50, 50, size=2_000),
+            Asset("http://e/big.webp", "webp", 800, 600, size=300_000),
+        )
+        result = build_results(
+            [MediaItem(id="i", title="T", assets=assets)], MediaType.MEME
+        )[0]
+        assert result["thumbnail_url"] == "http://e/small.webp"
+        assert "thumbnail_mime_type" not in result
+
+    def test_declared_mime_results_never_thumbnail_with_webp_or_webm(self):
+        # The mirror of the above: where we do declare a type, webp and webm
+        # have no honest label and must be skipped even when they are smallest.
+        assets = (
+            Asset("http://e/tiny.webp", "webp", 50, 50, size=2_000),
+            Asset("http://e/tiny.webm", "webm", 60, 60, size=3_000),
+            Asset("http://e/a.gif", "gif", 400, 400, size=200_000),
+        )
+        item = MediaItem(id="i", title="T", assets=assets)
+        for media_type in (MediaType.GIF, MediaType.STICKER):
+            result = build_results([item], media_type)[0]
+            assert result["thumbnail_url"] == "http://e/a.gif"
+            assert result["thumbnail_mime_type"] == "image/gif"
+            self._assert_honest(result, assets)

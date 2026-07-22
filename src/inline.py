@@ -9,7 +9,7 @@ they just are not addable to a sticker pack.
 
 from __future__ import annotations
 
-from .media import STILL_FORMATS, MediaItem, MediaType
+from .media import STILL_FORMATS, Asset, MediaItem, MediaType
 
 # Telegram rejects result IDs longer than 64 bytes.
 MAX_ID_LEN = 64
@@ -19,20 +19,55 @@ MAX_ID_LEN = 64
 # reliable. The hd gif of a single item can be 15 MB while its hd mp4 is
 # 494 KB, so without a cap one result could outweigh a whole page.
 #
-# The macOS client has been observed stack-overflowing on its MediaBox cache
-# queue while scrolling inline results; keeping per-result bytes and per-page
-# count low is the only lever a server has over that.
+# These caps were originally added to chase the macOS client's MediaBox
+# stack-overflow. That turned out to be a mislabelled thumbnail (see
+# ``_THUMB_MIME``), not volume — a stack overflow is a recursion signature, not
+# a memory one. The caps are kept because they are independently worthwhile.
 MAX_ANIMATION_BYTES = 1024 * 1024
 MAX_STILL_BYTES = 512 * 1024
 
+# Telegram allows only these three types in ``thumbnail_mime_type``, and the
+# client selects a decoder from the declared type before it sees the bytes.
+# Every other media URL we send is fetched straight from Klipy's CDN, which
+# returns a correct Content-Type, so this field is the only place a client can
+# be told something the bytes contradict.
+#
+# It previously mapped png and webp to image/jpeg, and webm to video/mp4, to
+# satisfy the enum. Klipy stickers ship png/webp/gif/webm and no jpg, so every
+# sticker result carried a png or webp labelled as JPEG. Thumbnails are what
+# the client decodes while scrolling the result strip, which is where the macOS
+# client was seen to stack-overflow.
 _THUMB_MIME = {
     "jpg": "image/jpeg",
-    "png": "image/jpeg",  # Telegram only allows jpeg/gif/mp4 here.
-    "webp": "image/jpeg",
     "gif": "image/gif",
     "mp4": "video/mp4",
-    "webm": "video/mp4",
 }
+
+# Ordered by preference: a still costs the client least, and mp4 beats gif for
+# the same frames. A rendition outside this set is skipped rather than
+# relabelled, so some results ship with no thumbnail. Telegram renders those
+# from the full media instead.
+DECLARED_THUMB_FORMATS = ("jpg", "mp4", "gif")
+
+# Photo and video results have no mime field, so the client learns the type
+# from the CDN's Content-Type and png/webp are safe there. The constraint we
+# are under is "never declare a type the bytes contradict", not "never send
+# webp" — so these results keep the wider, still-first choice they had.
+SNIFFED_THUMB_FORMATS = (*STILL_FORMATS, "gif", "mp4")
+
+
+def thumbnail(item: MediaItem) -> Asset | None:
+    """Thumbnail for results that declare ``thumbnail_mime_type``.
+
+    Restricted to formats Telegram lets us name honestly, because the client
+    chooses a decoder from the declared type before fetching the bytes.
+    """
+    return item.preview(*DECLARED_THUMB_FORMATS, max_bytes=MAX_STILL_BYTES)
+
+
+def _sniffed_thumbnail(item: MediaItem) -> Asset | None:
+    """Thumbnail for results that carry no mime field."""
+    return item.preview(*SNIFFED_THUMB_FORMATS, max_bytes=MAX_STILL_BYTES)
 
 
 def _result_id(item: MediaItem, index: int) -> str:
@@ -46,7 +81,7 @@ def _animation_result(item: MediaItem, result_id: str) -> dict | None:
     and Klipy stickers ship webm but no mp4 — sending webm made the client
     fetch a container it does not expect, so those fall through to gif.
     """
-    thumb = item.preview()
+    thumb = thumbnail(item)
     mp4 = item.best("mp4", max_bytes=MAX_ANIMATION_BYTES)
     if mp4:
         result = {
@@ -70,7 +105,7 @@ def _animation_result(item: MediaItem, result_id: str) -> dict | None:
 
     if thumb:
         result["thumbnail_url"] = thumb.url
-        result["thumbnail_mime_type"] = _THUMB_MIME.get(thumb.fmt, "image/jpeg")
+        result["thumbnail_mime_type"] = _THUMB_MIME[thumb.fmt]
     if item.title:
         result["title"] = item.title
     return result
@@ -81,7 +116,7 @@ def _photo_result(item: MediaItem, result_id: str) -> dict | None:
     if not photo:
         # Some "memes" come back animated; fall through rather than drop them.
         return _animation_result(item, result_id)
-    thumb = item.preview() or photo
+    thumb = _sniffed_thumbnail(item) or photo
     result = {
         "type": "photo",
         "id": result_id,
@@ -99,7 +134,7 @@ def _video_result(item: MediaItem, result_id: str) -> dict | None:
     video = item.best("mp4", max_bytes=MAX_ANIMATION_BYTES)
     if not video:
         return _animation_result(item, result_id)
-    thumb = item.preview()
+    thumb = _sniffed_thumbnail(item)
     # Telegram requires both thumbnail_url and title on video results.
     return {
         "type": "video",

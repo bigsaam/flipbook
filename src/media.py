@@ -83,6 +83,13 @@ class MediaItem:
             )
         return None
 
-    def preview(self) -> Asset | None:
-        """Smallest still or animated rendition, for use as a thumbnail."""
-        return self.best(*STILL_FORMATS, *ANIMATED_FORMATS, largest=False)
+    def preview(self, *formats: str, max_bytes: int = 0) -> Asset | None:
+        """Smallest rendition for use as a thumbnail.
+
+        Callers pass the formats they are able to describe truthfully to the
+        consumer; a rendition we cannot label honestly is worse than no
+        thumbnail at all. Defaults to any known format for callers that only
+        need a representative asset rather than something to hand to Telegram.
+        """
+        candidates = formats or (*STILL_FORMATS, *ANIMATED_FORMATS)
+        return self.best(*candidates, largest=False, max_bytes=max_bytes)

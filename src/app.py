@@ -13,6 +13,7 @@ from .inline import (
     MAX_ANIMATION_BYTES,
     build_results,
     no_results_article,
+    thumbnail,
     unavailable_article,
 )
 from .klipy import KlipyClient, KlipyError, KlipyUnavailable
@@ -29,7 +30,7 @@ def _result_bytes(item, media_type) -> int:
     chosen = item.best("mp4", max_bytes=MAX_ANIMATION_BYTES) or item.best(
         "gif", max_bytes=MAX_ANIMATION_BYTES
     )
-    thumb = item.preview()
+    thumb = thumbnail(item)
     return (chosen.size if chosen else 0) + (thumb.size if thumb else 0)
 
 
